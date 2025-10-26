@@ -50,6 +50,15 @@ def start(message):
     )
 
 
+# --- Команда для отримання Thread ID ---
+@bot.message_handler(commands=['threadid'])
+def thread_id_check(message):
+    if message.message_thread_id:
+        bot.reply_to(message, f"🧩 ID цієї гілки: {message.message_thread_id}", parse_mode="Markdown")
+    else:
+        bot.reply_to(message, "⚠️ Ця гілка не є форумною (немає thread_id).")
+
+
 # --- Вибір категорії ---
 @bot.message_handler(func=lambda message: message.text in ['📛 Скарга', '💡 Пропозиція', '❓ Запитання', '📬 Інше'])
 def choose_category(message):
@@ -95,13 +104,16 @@ def admin_reply(message):
         bot.reply_to(message, "✅ Відповідь надіслано користувачу.")
     else:
         bot.reply_to(message, "⚠️ У цьому повідомленні немає ID користувача — відправити відповідь неможливо.")
+        # --- Тестовий хендлер для всіх повідомлень (debug) ---
+@bot.message_handler(func=lambda m: True)
+def debug(message):
+    print("===========")
+    print("Chat ID:", message.chat.id)
+    print("Thread ID:", message.message_thread_id)
+    print("From:", message.from_user.id, message.from_user.username)
+    print("Text:", message.text)
+    print("===========")
 
 
 print("✅ Бот запущений...")
-@bot.message_handler(commands=['threadid'])
-def thread_id_check(message):
-    if message.message_thread_id:
-        bot.reply_to(message, f"🧩 ID цієї гілки: {message.message_thread_id}", parse_mode="Markdown")
-    else:
-        bot.reply_to(message, "⚠️ Ця гілка не є форумною (немає thread_id).")
 bot.polling(non_stop=True)
