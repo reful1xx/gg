@@ -41,11 +41,11 @@ def log_message(category_name, user_id, text):
     """Запис повідомлення у файл категорії"""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     filename = {
-        '📛 Скарга': 'skarga.log',
-        '💡 Пропозиція': 'propozytsiya.log',
-        '❓ Запитання': 'zapytannya.log',
-        '📬 Інше': 'inshe.log'
-    }.get(category_name, 'other.log')
+        "Скарга": "skarga.log",
+        "Пропозиція": "propozytsiya.log",
+        "Запитання": "zapytannya.log",
+        "Інше": "inshe.log"
+    }.get(category_name, "other.log")
 
     path = os.path.join(LOG_DIR, filename)
     with open(path, "a", encoding="utf-8") as f:
@@ -150,3 +150,4 @@ def admin_reply(message):
 
 print("✅ Бот запущений...")
 bot.polling(non_stop=True)
+
