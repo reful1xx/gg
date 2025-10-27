@@ -22,16 +22,14 @@ def run():
 Thread(target=run).start()
 # === Кінець Flask-блоку ===
 
-
 # --- Токен і ID групи ---
 TOKEN = os.environ['TOKEN']
 GROUP_ID = int(os.environ['GROUP_ID'])
 THREAD_ID = int(os.environ.get('THREAD_ID', 0))
-ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))  # ID адміна для команди /getlogs
+ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))
 
 bot = telebot.TeleBot(TOKEN)
 user_state = {}
-
 
 # === Створення папки логів ===
 LOG_DIR = "logs"
@@ -41,12 +39,11 @@ def log_message(category_name, user_id, text):
     """Запис повідомлення у файл категорії"""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     filename = {
-        "Скарга": "skarga.log",
-        "Пропозиція": "propozytsiya.log",
-        "Запитання": "zapytannya.log",
-        "Інше": "inshe.log"
-    }.get(category_name, "other.log")
-
+        '📛 Скарга': 'skarga.log',
+        '💡 Пропозиція': 'propozytsiya.log',
+        '❓ Запитання': 'zapytannya.log',
+        '📬 Інше': 'inshe.log'
+    }.get(category_name, 'other.log')
     path = os.path.join(LOG_DIR, filename)
     with open(path, "a", encoding="utf-8") as f:
         f.write(f"[{now}] user_id={user_id} | text=\"{text}\"\n")
@@ -63,14 +60,12 @@ def cleanup_old_logs(days=30):
 
 cleanup_old_logs()
 
-
 # --- Головне меню ---
 def main_menu():
     markup = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
     markup.add('📛 Скарга', '💡 Пропозиція')
     markup.add('❓ Запитання', '📬 Інше')
     return markup
-
 
 # --- /start ---
 @bot.message_handler(commands=['start'])
@@ -82,7 +77,6 @@ def start(message):
         "❓ Запитання / 📬 Інше — пересилаються з ID користувача, щоб отримати відповідь.",
         reply_markup=main_menu()
     )
-
 
 # --- /getlogs (для адміна) ---
 @bot.message_handler(commands=['getlogs'])
@@ -101,13 +95,11 @@ def get_logs(message):
         bot.send_document(ADMIN_ID, f)
     os.remove(zip_path)
 
-
 # --- Вибір категорії ---
 @bot.message_handler(func=lambda message: message.text in ['📛 Скарга', '💡 Пропозиція', '❓ Запитання', '📬 Інше'])
 def choose_category(message):
     user_state[message.chat.id] = message.text
     bot.send_message(message.chat.id, "Введи текст повідомлення:")
-
 
 # --- Обробка повідомлення ---
 @bot.message_handler(func=lambda message: message.chat.id in user_state)
@@ -116,7 +108,7 @@ def handle_text(message):
     text = message.text
     user_id = message.chat.id
 
-    # --- Логування ---
+    # --- Логування (завжди з user_id) ---
     log_message(category, user_id, text)
 
     # --- Відповіді ---
@@ -127,14 +119,14 @@ def handle_text(message):
     elif category == '💡 Пропозиція':
         bot.send_message(user_id, "💬 Дякуємо, що робите нашу школу кращою!")
         bot.send_message(GROUP_ID, f"📩 *Нова пропозиція:*\n\n{text}", parse_mode="Markdown", message_thread_id=THREAD_ID or None)
-        elif category == '❓ Запитання':
+        
+    elif category == '❓ Запитання':
         bot.send_message(user_id, "✅ Ваше запитання передано учнівському самоврядуванню. Очікуйте відповіді.")
         bot.send_message(GROUP_ID, f"📩 *Нове запитання:*\n\n{text}\n\n👤 ID користувача: {user_id}", parse_mode="Markdown", message_thread_id=THREAD_ID or None)
 
     elif category == '📬 Інше':
         bot.send_message(user_id, "✅ Повідомлення передано учнівському самоврядуванню. Очікуйте відповіді.")
         bot.send_message(GROUP_ID, f"📩 *Повідомлення (Інше):*\n\n{text}\n\n👤 ID користувача: {user_id}", parse_mode="Markdown", message_thread_id=THREAD_ID or None)
-
 
 # --- Відповідь адміністратора ---
 @bot.message_handler(func=lambda message: message.chat.id == GROUP_ID and message.reply_to_message)
@@ -150,4 +142,3 @@ def admin_reply(message):
 
 print("✅ Бот запущений...")
 bot.polling(non_stop=True)
-
