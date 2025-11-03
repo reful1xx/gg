@@ -4,9 +4,11 @@ import telebot
 from telebot import types
 from flask import Flask
 from threading import Thread
+import threading
 import re
 from datetime import datetime, timedelta
 import shutil
+import time
 
 # === Flask-сервер для Render ===
 app = Flask('')
@@ -35,18 +37,23 @@ user_state = {}
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 
-def log_message(category_name, user_id, text):
-    """Запис повідомлення у файл категорії"""
+def log_message(category_name, user, text):
+    """Запис повідомлення у файл категорії з username або ім'ям"""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    username = user.username if user.username else user.first_name
+    user_id = user.id
+
     filename = {
         '📛 Скарга': 'skarga.log',
         '💡 Пропозиція': 'propozytsiya.log',
         '❓ Запитання': 'zapytannya.log',
         '📬 Інше': 'inshe.log'
     }.get(category_name, 'other.log')
+
     path = os.path.join(LOG_DIR, filename)
     with open(path, "a", encoding="utf-8") as f:
-        f.write(f"[{now}] user_id={user_id} | text=\"{text}\"\n")
+        f.write(f"[{now}] {category_name} | user={username} | id={user_id} | text=\"{text}\"\n")
 
 def cleanup_old_logs(days=30):
     """Видалення логів старших за N днів"""
@@ -73,8 +80,8 @@ def start(message):
     bot.send_message(
         message.chat.id,
         "Привіт! Вибери тип повідомлення:\n\n"
-        "📛 Скарга / 💡 Пропозиція — надсилаються анонімно.\n"
-        "❓ Запитання / 📬 Інше — пересилаються з ID користувача, щоб отримати відповідь.",
+        "📛 Скарга / 💡 Пропозиція \n"
+        "❓ Запитання / 📬 Інше - повідомлення надсилаються анонімно, ми поважаємо вашу думку!",
         reply_markup=main_menu()
     )
 
@@ -95,6 +102,31 @@ def get_logs(message):
         bot.send_document(ADMIN_ID, f)
     os.remove(zip_path)
 
+# --- Автоматична відправка логів щодня о 20:00 ---
+def send_logs_daily():
+    while True:
+        now = datetime.now()
+        target_time = now.replace(hour=20, minute=0, second=0, microsecond=0)
+
+        if now >= target_time:
+            target_time += timedelta(days=1)
+
+        wait_seconds = (target_time - now).total_seconds()
+        time.sleep(wait_seconds)
+
+        try:
+            if os.listdir(LOG_DIR):
+                zip_path = "logs.zip"
+                shutil.make_archive("logs", 'zip', LOG_DIR)
+                with open(zip_path, "rb") as f:
+                    bot.send_document(ADMIN_ID, f, caption=f"📦 Добові логи за {datetime.now().strftime('%Y-%m-%d')}")
+                os.remove(zip_path)
+        except Exception as e:
+            bot.send_message(ADMIN_ID, f"⚠️ Помилка при відправці логів: {e}")
+
+# Запускаємо планувальник у фоновому потоці
+Thread(target=send_logs_daily, daemon=True).start()
+
 # --- Вибір категорії ---
 @bot.message_handler(func=lambda message: message.text in ['📛 Скарга', '💡 Пропозиція', '❓ Запитання', '📬 Інше'])
 def choose_category(message):
@@ -106,10 +138,11 @@ def choose_category(message):
 def handle_text(message):
     category = user_state.pop(message.chat.id)
     text = message.text
-    user_id = message.chat.id
+    user = message.from_user
+    user_id = user.id
 
-    # --- Логування (завжди з user_id) ---
-    log_message(category, user_id, text)
+    # --- Логування з username/ім'ям ---
+    log_message(category, user, text)
 
     # --- Відповіді ---
     if category == '📛 Скарга':
