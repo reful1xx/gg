@@ -1,4 +1,4 @@
--- coding: utf-8 --
+# -*- coding: utf-8 -*-
 
 import os
 import telebot
@@ -158,3 +158,4 @@ Thread(target=schedule_daily_logs).start()
 
 print("✅ Бот запущений...")
 bot.polling(non_stop=True)
+
