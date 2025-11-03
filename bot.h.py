@@ -6,10 +6,9 @@ from flask import Flask
 from threading import Thread
 from datetime import datetime, timedelta
 import shutil
-import re
 import threading
 import time
-import pytz  # <--- додаємо для таймзони
+import pytz  # для таймзони
 
 # === Flask-сервер для Render ===
 app = Flask('')
@@ -105,7 +104,10 @@ def choose_category(message):
     user_state[message.chat.id] = message.text
     bot.send_message(message.chat.id, "✍️ Введіть текст повідомлення (воно залишиться анонімним):")
 
-# --- Обробка повідомлень ---
+# === Словник для зв’язку між повідомленням у групі та користувачем ===
+message_links = {}
+
+# --- Обробка повідомлень від користувачів ---
 @bot.message_handler(func=lambda message: message.chat.id in user_state)
 def handle_text(message):
     category = user_state.pop(message.chat.id)
@@ -113,14 +115,45 @@ def handle_text(message):
 
     log_message(category, message.from_user, text)
 
-    # Відправка адміну/групі
-    bot.send_message(GROUP_ID,
+    # Надсилаємо в групу
+    sent = bot.send_message(
+        GROUP_ID,
         f"📩 *Нове повідомлення ({category}):*\n\n{text}",
         parse_mode="Markdown",
         message_thread_id=THREAD_ID or None
     )
 
-    bot.send_message(message.chat.id, "✅ Ваше повідомлення отримано. Ми цінуємо вашу конфіденційність 💬")
+    # Зберігаємо зв’язок між повідомленням у групі та користувачем
+    message_links[sent.message_id] = message.chat.id
+
+    bot.send_message(
+        message.chat.id,
+        "✅ Ваше повідомлення отримано. Ми цінуємо вашу конфіденційність 💬"
+    )
+
+# --- Обробка відповідей у групі ---
+@bot.message_handler(func=lambda m: m.chat.id == GROUP_ID)
+def handle_group_message(m):
+    # Якщо це не reply — нічого не робимо
+    if not m.reply_to_message:
+        return
+
+    # Якщо reply не на повідомлення бота — ігноруємо
+    if m.reply_to_message.from_user.id != bot.get_me().id:
+        return
+
+    # Якщо reply на повідомлення, яке бот відправив користувача
+    if m.reply_to_message.message_id in message_links:
+        user_id = message_links[m.reply_to_message.message_id]
+        try:
+            bot.send_message(
+                user_id,
+                f"💬 *Відповідь від адміністрації:*\n\n{m.text}",
+                parse_mode="Markdown"
+            )
+            bot.reply_to(m, "✅ Відповідь переслано користувачу (анонімно).")
+        except Exception as e:
+            bot.reply_to(m, f"⚠️ Не вдалося надіслати відповідь: {e}")
 
 # === Автоматична відправка логів адміну о 20:00 за Києвом ===
 def send_daily_logs():
