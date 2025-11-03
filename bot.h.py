@@ -1,177 +1,160 @@
-# -*- coding: utf-8 -*-
+-- coding: utf-8 --
+
 import os
 import telebot
 from telebot import types
 from flask import Flask
 from threading import Thread
-import threading
-import re
-from datetime import datetime, timedelta
 import shutil
+from datetime import datetime, timedelta
+import schedule
 import time
+import pytz
 
-# === Flask-сервер для Render ===
+=== Flask-сервер для Render ===
+
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "✅ Бот працює 24/7 на Render!"
+return "✅ Бот працює 24/7 на Render!"
 
 def run():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+port = int(os.environ.get("PORT", 8080))
+app.run(host='0.0.0.0', port=port)
 
 Thread(target=run).start()
-# === Кінець Flask-блоку ===
 
-# --- Токен і ID групи ---
+=== Кінець Flask-блоку ===
+
+--- Токен і ID групи/адміна ---
+
 TOKEN = os.environ['TOKEN']
 GROUP_ID = int(os.environ['GROUP_ID'])
-THREAD_ID = int(os.environ.get('THREAD_ID', 0))
 ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))
+THREAD_ID = int(os.environ.get('THREAD_ID', 0))
 
 bot = telebot.TeleBot(TOKEN)
 user_state = {}
 
-# === Створення папки логів ===
+=== Папка логів ===
+
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 
-def log_message(category_name, user, text):
-    """Запис повідомлення у файл категорії з username або ім'ям"""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def get_user_display_name(message):
+if message.from_user.username:
+return f"@{message.from_user.username}"
+else:
+full_name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip()
+return full_name if full_name else f"user_{message.chat.id}"
 
-    username = user.username if user.username else user.first_name
-    user_id = user.id
-
-    filename = {
-        '📛 Скарга': 'skarga.log',
-        '💡 Пропозиція': 'propozytsiya.log',
-        '❓ Запитання': 'zapytannya.log',
-        '📬 Інше': 'inshe.log'
-    }.get(category_name, 'other.log')
-
-    path = os.path.join(LOG_DIR, filename)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(f"[{now}] {category_name} | user={username} | id={user_id} | text=\"{text}\"\n")
+def log_message(category_name, user_name, text):
+now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+filename = "all_messages.log"
+path = os.path.join(LOG_DIR, filename)
+with open(path, "a", encoding="utf-8") as f:
+f.write(f"[{now}] user={user_name} | category={category_name} | text="{text}"\n")
 
 def cleanup_old_logs(days=30):
-    """Видалення логів старших за N днів"""
-    cutoff = datetime.now() - timedelta(days=days)
-    for file in os.listdir(LOG_DIR):
-        path = os.path.join(LOG_DIR, file)
-        if os.path.isfile(path):
-            mtime = datetime.fromtimestamp(os.path.getmtime(path))
-            if mtime < cutoff:
-                os.remove(path)
+cutoff = datetime.now() - timedelta(days=days)
+for file in os.listdir(LOG_DIR):
+path = os.path.join(LOG_DIR, file)
+if os.path.isfile(path):
+mtime = datetime.fromtimestamp(os.path.getmtime(path))
+if mtime < cutoff:
+os.remove(path)
 
 cleanup_old_logs()
 
-# --- Головне меню ---
-def main_menu():
-    markup = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-    markup.add('📛 Скарга', '💡 Пропозиція')
-    markup.add('❓ Запитання', '📬 Інше')
-    return markup
+--- Головне меню ---
 
-# --- /start ---
+def main_menu():
+markup = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+markup.add('📛 Скарга', '💡 Пропозиція')
+markup.add('❓ Запитання', '📬 Інше')
+return markup
+
+--- /start ---
+
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.send_message(
-        message.chat.id,
-        "Привіт! Вибери тип повідомлення:\n\n"
-        "📛 Скарга / 💡 Пропозиція \n"
-        "❓ Запитання / 📬 Інше - повідомлення надсилаються анонімно, ми поважаємо вашу думку!",
-        reply_markup=main_menu()
-    )
+bot.send_message(
+message.chat.id,
+"Привіт! Вибери тип повідомлення:\n\n"
+"Всі повідомлення надсилаються анонімно.\n"
+"Ми цінуємо вашу конфіденційність.",
+reply_markup=main_menu()
+)
 
-# --- /getlogs (для адміна) ---
+--- /getlogs для адміна ---
+
 @bot.message_handler(commands=['getlogs'])
 def get_logs(message):
-    if message.chat.id != ADMIN_ID:
-        bot.reply_to(message, "⛔ У вас немає прав для цієї команди.")
-        return
+if message.chat.id != ADMIN_ID:
+bot.reply_to(message, "⛔ У вас немає прав для цієї команди.")
+return
+if not os.listdir(LOG_DIR):
+bot.send_message(ADMIN_ID, "⚠️ Логи порожні.")
+return
+zip_path = "logs.zip"
+shutil.make_archive("logs", 'zip', LOG_DIR)
+with open(zip_path, "rb") as f:
+bot.send_document(ADMIN_ID, f)
+os.remove(zip_path)
 
-    if not os.listdir(LOG_DIR):
-        bot.send_message(ADMIN_ID, "⚠️ Логи порожні.")
-        return
+--- Вибір категорії ---
 
-    zip_path = "logs.zip"
-    shutil.make_archive("logs", 'zip', LOG_DIR)
-    with open(zip_path, "rb") as f:
-        bot.send_document(ADMIN_ID, f)
-    os.remove(zip_path)
-
-# --- Автоматична відправка логів щодня о 20:00 ---
-def send_logs_daily():
-    while True:
-        now = datetime.now()
-        target_time = now.replace(hour=20, minute=0, second=0, microsecond=0)
-
-        if now >= target_time:
-            target_time += timedelta(days=1)
-
-        wait_seconds = (target_time - now).total_seconds()
-        time.sleep(wait_seconds)
-
-        try:
-            if os.listdir(LOG_DIR):
-                zip_path = "logs.zip"
-                shutil.make_archive("logs", 'zip', LOG_DIR)
-                with open(zip_path, "rb") as f:
-                    bot.send_document(ADMIN_ID, f, caption=f"📦 Добові логи за {datetime.now().strftime('%Y-%m-%d')}")
-                os.remove(zip_path)
-        except Exception as e:
-            bot.send_message(ADMIN_ID, f"⚠️ Помилка при відправці логів: {e}")
-
-# Запускаємо планувальник у фоновому потоці
-Thread(target=send_logs_daily, daemon=True).start()
-
-# --- Вибір категорії ---
 @bot.message_handler(func=lambda message: message.text in ['📛 Скарга', '💡 Пропозиція', '❓ Запитання', '📬 Інше'])
 def choose_category(message):
-    user_state[message.chat.id] = message.text
-    bot.send_message(message.chat.id, "Введи текст повідомлення:")
+user_state[message.chat.id] = message.text
+bot.send_message(message.chat.id, "Введи текст повідомлення:")
 
-# --- Обробка повідомлення ---
+--- Обробка повідомлення ---
+
 @bot.message_handler(func=lambda message: message.chat.id in user_state)
 def handle_text(message):
-    category = user_state.pop(message.chat.id)
-    text = message.text
-    user = message.from_user
-    user_id = user.id
+category = user_state.pop(message.chat.id)
+text = message.text
+user_name = get_user_display_name(message)
 
-    # --- Логування з username/ім'ям ---
-    log_message(category, user, text)
+# --- Логування ---
+log_message(category, user_name, text)
 
-    # --- Відповіді ---
-    if category == '📛 Скарга':
-        bot.send_message(user_id, "✅ Вашу скаргу отримано. Вона буде розглянута найближчим часом.")
-        bot.send_message(GROUP_ID, f"📩 *Нова скарга:*\n\n{text}", parse_mode="Markdown", message_thread_id=THREAD_ID or None)
+# --- Відповідь користувачу ---
+bot.send_message(message.chat.id, "✅ Ваше повідомлення отримано. Ми цінуємо вашу конфіденційність.")
 
-    elif category == '💡 Пропозиція':
-        bot.send_message(user_id, "💬 Дякуємо, що робите нашу школу кращою!")
-        bot.send_message(GROUP_ID, f"📩 *Нова пропозиція:*\n\n{text}", parse_mode="Markdown", message_thread_id=THREAD_ID or None)
-        
-    elif category == '❓ Запитання':
-        bot.send_message(user_id, "✅ Ваше запитання передано учнівському самоврядуванню. Очікуйте відповіді.")
-        bot.send_message(GROUP_ID, f"📩 *Нове запитання:*\n\n{text}\n\n👤 ID користувача: {user_id}", parse_mode="Markdown", message_thread_id=THREAD_ID or None)
+# --- Надсилання в групу адміністраторів ---
+bot.send_message(
+    GROUP_ID,
+    f"📩 *Нове повідомлення ({category}):*\n\n{text}",
+    parse_mode="Markdown",
+    message_thread_id=THREAD_ID or None
+)
 
-    elif category == '📬 Інше':
-        bot.send_message(user_id, "✅ Повідомлення передано учнівському самоврядуванню. Очікуйте відповіді.")
-        bot.send_message(GROUP_ID, f"📩 *Повідомлення (Інше):*\n\n{text}\n\n👤 ID користувача: {user_id}", parse_mode="Markdown", message_thread_id=THREAD_ID or None)
+--- Щоденна відправка логів адміністратору о 20:00 Київ ---
 
-# --- Відповідь адміністратора ---
-@bot.message_handler(func=lambda message: message.chat.id == GROUP_ID and message.reply_to_message)
-def admin_reply(message):
-    reply_text = message.text
-    original = message.reply_to_message.text
+def send_logs_daily():
+if os.listdir(LOG_DIR):
+zip_path = "logs.zip"
+shutil.make_archive("logs", 'zip', LOG_DIR)
+with open(zip_path, "rb") as f:
+bot.send_document(ADMIN_ID, f)
+os.remove(zip_path)
+# --- Очистка логів після відправки ---
+for file in os.listdir(LOG_DIR):
+file_path = os.path.join(LOG_DIR, file)
+if os.path.isfile(file_path):
+os.remove(file_path)
 
-    match = re.search(r'ID користувача: (\d+)', original)
-    if match:
-        user_id = int(match.group(1))
-        bot.send_message(user_id, f"📬 Відповідь учнівського самоврядування:\n\n{reply_text}")
-        bot.reply_to(message, "✅ Відповідь надіслано користувачу.")
+def schedule_daily_logs():
+tz = pytz.timezone('Europe/Kiev')
+schedule.every().day.at("20:00").do(send_logs_daily).tag("daily_logs")
+while True:
+schedule.run_pending()
+time.sleep(30)
+
+Thread(target=schedule_daily_logs).start()
 
 print("✅ Бот запущений...")
 bot.polling(non_stop=True)
