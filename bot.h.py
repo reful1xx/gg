@@ -215,7 +215,7 @@ async def send_logs_daily(app):
             logs = load_logs()
             if logs:
                 with open("logs.txt", "w", encoding="utf-8") as f:
-for l in logs:
+                    for l in logs:
                         f.write(f"[{l['time']}] {l['user_id']} ({l['username']}, {l['category']}): {l['text']}\n")
                 with open("logs.txt", "rb") as f:
                     await app.bot.send_document(chat_id=ADMIN_ID, document=f)
@@ -241,3 +241,4 @@ async def main():
 
 if name == "main":
     asyncio.run(main())
+
