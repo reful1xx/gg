@@ -114,12 +114,12 @@ async def banlogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not banlist:
         await update.message.reply_text("⚠️ Список заблокованих порожній.")
         return
-
     text = "📌 Заблоковані користувачі:\n"
     for user_id in banlist:
         text += f"- [{user_id}](tg://user?id={user_id})\n"
     await update.message.reply_text(text, parse_mode="Markdown")
-    # -------------------- Кнопки Заблокувати / Розблокувати --------------------
+
+# -------------------- Кнопки Заблокувати / Розблокувати --------------------
 async def block_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -164,23 +164,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     banlist = load_banlist()
 
-    # -------------------- Якщо заблокований --------------------
     if user_id in banlist:
         await update.message.reply_text("⛔ Вас заблоковано і ви не можете надсилати повідомлення.")
         return
 
-    # -------------------- Вибір категорії --------------------
     if text in ['📛 Скарга', '💡 Пропозиція', '❓ Запитання', '📬 Інше']:
         user_state[chat_id] = text
         await update.message.reply_text("✍️ Введіть текст повідомлення (воно залишиться анонімним):")
         return
 
-    # -------------------- Обробка повідомлення --------------------
     if chat_id in user_state:
         category = user_state.pop(chat_id)
         display_name = get_user_display_name(user)
 
-        # Логування на JSONBin
         logs = load_logs()
         logs.append({
             "user_id": user_id,
@@ -191,10 +187,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
         save_logs(logs)
 
-        # Відповідь користувачу
         await update.message.reply_text("✅ Ваше повідомлення отримано. Ми цінуємо вашу конфіденційність і думки.")
 
-        # Надсилання в групу + гілку з кнопками
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔒 Заблокувати", callback_data=f"ban_{user_id}"),
              InlineKeyboardButton("✅ Розблокувати", callback_data=f"unban_{user_id}")]
@@ -239,6 +233,6 @@ async def main():
 
     await app.run_polling()
 
-if__name__=="__main__":
+if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
