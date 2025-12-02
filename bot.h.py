@@ -103,13 +103,13 @@ def main_menu():
 def start_cmd(message):
     if message.chat.type != "private":
         return
-    bot.send_message(message.chat.id, "Привіт! Виберіть тип повідомлення:", reply_markup=main_menu())
+    bot.send_message(message.chat.id, "Привіт! Вибери тип повідомлення (Повідомлення відправляються Анонімно!):", reply_markup=main_menu())
 
 # -------------------- Вибір категорії --------------------
 @bot.message_handler(func=lambda m: m.chat.type == "private" and m.text in ['📛 Скарга', '💡 Пропозиція', '❓ Запитання', '📬 Інше'])
 def choose_category(message):
     user_state[message.chat.id] = message.text
-    bot.send_message(message.chat.id, "✍️ Введіть текст повідомлення (воно буде анонімно переслане в групу):")
+    bot.send_message(message.chat.id, "✍️ Введіть текст повідомлення:")
 
 # -------------------- Обробка повідомлення від користувача --------------------
 @bot.message_handler(func=lambda m: m.chat.type == "private" and m.chat.id in user_state, content_types=['text'])
@@ -123,7 +123,7 @@ def handle_user_submission(message):
         bot.send_message(chat_id, "⛔ Вас заблоковано.\nВи більше не можете надсилати повідомлення.")
         return
 
-    # Логи
+    # Логи (повні)
     logs = load_logs()
     logs.append({
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -137,24 +137,25 @@ def handle_user_submission(message):
 
     bot.send_message(chat_id, "✅ Ваше повідомлення надіслано. Дякуємо!")
 
-    # Надсилаємо в групу
-    display_uname = format_username(message.from_user.username)
+    # Повідомлення в групу (скорочене)
     group_text = (
         f"📩 <b>Нове повідомлення</b>\n"
         f"Тип: {category}\n\n"
         f"{text}\n\n"
-        f"ID: <code>{user_id}</code>\n"
-        f"Username: {display_uname}\n"
-        f"Посилання: {user_link(user_id)}"
+        f"ID: <code>{user_id}</code>"
     )
+
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🚫 Заблокувати", callback_data=f"ban_{user_id}"),
-           types.InlineKeyboardButton("✔️ Розблокувати", callback_data=f"unban_{user_id}"))
+    kb.add(
+        types.InlineKeyboardButton("🚫 Заблокувати", callback_data=f"ban_{user_id}"),
+        types.InlineKeyboardButton("✔️ Розблокувати", callback_data=f"unban_{user_id}")
+    )
 
     if THREAD_ID:
         sent = bot.send_message(GROUP_ID, group_text, reply_markup=kb, parse_mode="HTML", message_thread_id=THREAD_ID)
     else:
         sent = bot.send_message(GROUP_ID, group_text, reply_markup=kb, parse_mode="HTML")
+
     msg_to_user[sent.message_id] = user_id
 
 # -------------------- Callback кнопки --------------------
@@ -275,3 +276,4 @@ while True:
     except Exception as e:
         print("Polling error:", e)
         time.sleep(5)
+
