@@ -1,16 +1,15 @@
 # -- coding: utf-8 --
 
 import os
-import asyncio
-import requests
-from datetime import datetime
-from threading import Thread
+import telebot
+from telebot import types
 from flask import Flask
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters
-)
+from threading import Thread
+from datetime import datetime, timedelta
+import schedule
+import time
+import pytz
+import requests
 
 # -------------------- Flask-сервер для Render --------------------
 app = Flask('')
@@ -19,20 +18,23 @@ app = Flask('')
 def home():
     return "✅ Бот працює 24/7 на Render!"
 
-def run():
+def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-Thread(target=run).start()
+Thread(target=run_flask).start()
 
 # -------------------- Змінні --------------------
 TOKEN = os.environ['TOKEN']
+GROUP_ID = int(os.environ['GROUP_ID'])
+THREAD_ID = int(os.environ.get('THREAD_ID', 0))
 ADMIN_ID = int(os.environ['ADMIN_ID'])
 JSONBIN_API_KEY = os.environ['JSONBIN_API_KEY']
 BANLIST_BIN_ID = os.environ['BANLIST_BIN_ID']
 LOGS_BIN_ID = os.environ['LOGS_BIN_ID']
-GROUP_ID = int(os.environ['GROUP_ID'])
-THREAD_ID = int(os.environ.get('THREAD_ID', 0))
+
+bot = telebot.TeleBot(TOKEN)
+user_state = {}  # chat_id -> category
 
 # -------------------- JSONBin функції --------------------
 def load_jsonbin(bin_id):
@@ -59,180 +61,142 @@ def load_logs():
 def save_logs(data):
     save_jsonbin(LOGS_BIN_ID, data)
 
-# -------------------- Керування станом користувача --------------------
-user_state = {}  # chat_id -> category
-
-def get_user_display_name(user):
-    if user.username:
-        return f"@{user.username}"
+# -------------------- Користувач --------------------
+def get_user_display_name(message):
+    if message.from_user.username:
+        return f"@{message.from_user.username}"
     else:
-        return f"[{user.first_name}](tg://user?id={user.id})"
+        full_name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip()
+        return full_name if full_name else f"[user](tg://user?id={message.from_user.id})"
 
 # -------------------- Головне меню --------------------
 def main_menu():
-    return ReplyKeyboardMarkup(
-        [['📛 Скарга', '💡 Пропозиція'], ['❓ Запитання', '📬 Інше']],
-        resize_keyboard=True, one_time_keyboard=True
-    )
+    markup = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+    markup.add('📛 Скарга', '💡 Пропозиція')
+    markup.add('❓ Запитання', '📬 Інше')
+    return markup
 
-# -------------------- Команди адміну --------------------
-async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    if len(context.args) == 0:
-        await update.message.reply_text("Вкажи ID користувача: /ban 123456")
-        return
-    user_id = int(context.args[0])
-    banlist = load_banlist()
-    if user_id not in banlist:
-        banlist.append(user_id)
-        save_banlist(banlist)
-        await update.message.reply_text(f"🔒 Користувач {user_id} заблокований")
-    else:
-        await update.message.reply_text("Він вже заблокований.")
-
-async def unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    if len(context.args) == 0:
-        await update.message.reply_text("Вкажи ID: /unban 123456")
-        return
-    user_id = int(context.args[0])
-    banlist = load_banlist()
-    if user_id in banlist:
-        banlist.remove(user_id)
-        save_banlist(banlist)
-        await update.message.reply_text(f"✔ Користувач {user_id} розблокований")
-    else:
-        await update.message.reply_text("ID не знайдено у бані.")
-
-# -------------------- /banlogs --------------------
-async def banlogs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    banlist = load_banlist()
-    if not banlist:
-        await update.message.reply_text("⚠️ Список заблокованих порожній.")
-        return
-    text = "📌 Заблоковані користувачі:\n"
-    for user_id in banlist:
-        text += f"- [{user_id}](tg://user?id={user_id})\n"
-    await update.message.reply_text(text, parse_mode="Markdown")
-
-# -------------------- Кнопки Заблокувати / Розблокувати --------------------
-async def block_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.from_user.id != ADMIN_ID:
-        return
-
-    user_id = int(query.data.split("_")[1])
-    action = query.data.split("_")[0]
-    banlist = load_banlist()
-
-    if action == "ban":
-        if user_id not in banlist:
-            banlist.append(user_id)
-            save_banlist(banlist)
-            await query.edit_message_reply_markup(None)
-            await query.message.reply_text(f"🔒 Користувач {user_id} заблокований кнопкою")
-        else:
-            await query.answer("Він вже заблокований", show_alert=True)
-    elif action == "unban":
-        if user_id in banlist:
-            banlist.remove(user_id)
-            save_banlist(banlist)
-            await query.edit_message_reply_markup(None)
-            await query.message.reply_text(f"✔ Користувач {user_id} розблокований кнопкою")
-        else:
-            await query.answer("Він не заблокований", show_alert=True)
-
-# -------------------- /start --------------------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+# -------------------- Команди --------------------
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.send_message(
+        message.chat.id,
         "Привіт! Вибери тип повідомлення:\n\n"
         "📛 Скарга / 💡 Пропозиція / ❓ Запитання / 📬 Інше — усі повідомлення анонімні.\n"
         "Ми цінуємо вашу конфіденційність 💬",
         reply_markup=main_menu()
     )
 
+@bot.message_handler(commands=['banlogs'])
+def banlogs(message):
+    if message.chat.id != ADMIN_ID:
+        bot.reply_to(message, "⛔ У вас немає прав")
+        return
+    banlist = load_banlist()
+    if not banlist:
+        bot.send_message(ADMIN_ID, "⚠️ Список заблокованих порожній.")
+        return
+    text = "📌 Заблоковані користувачі:\n"
+    for uid in banlist:
+        text += f"- [{uid}](tg://user?id={uid})\n"
+    bot.send_message(ADMIN_ID, text, parse_mode="Markdown")
+
+# -------------------- Вибір категорії --------------------
+@bot.message_handler(func=lambda message: message.text in ['📛 Скарга', '💡 Пропозиція', '❓ Запитання', '📬 Інше'])
+def choose_category(message):
+    user_state[message.chat.id] = message.text
+    bot.send_message(message.chat.id, "✍️ Введіть текст повідомлення (воно залишиться анонімним):")
+
 # -------------------- Обробка повідомлень --------------------
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    user = update.effective_user
-    user_id = user.id
-    text = update.message.text
+@bot.message_handler(func=lambda message: message.chat.id in user_state)
+def handle_text(message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    category = user_state.pop(chat_id)
+    text = message.text
+    display_name = get_user_display_name(message)
     banlist = load_banlist()
 
     if user_id in banlist:
-        await update.message.reply_text("⛔ Вас заблоковано і ви не можете надсилати повідомлення.")
+        bot.send_message(chat_id, "⛔ Вас заблоковано і ви не можете надсилати повідомлення.")
         return
 
-    if text in ['📛 Скарга', '💡 Пропозиція', '❓ Запитання', '📬 Інше']:
-        user_state[chat_id] = text
-        await update.message.reply_text("✍️ Введіть текст повідомлення (воно залишиться анонімним):")
+    # --- Логування ---
+    logs = load_logs()
+    logs.append({
+        "user_id": user_id,
+        "username": display_name,
+        "category": category,
+        "text": text,
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+    save_logs(logs)
+
+    # --- Відповідь користувачу ---
+    bot.send_message(chat_id, "✅ Ваше повідомлення отримано. Ми цінуємо вашу конфіденційність і думки.")
+
+    # --- Надсилання в групу + гілку з кнопками ---
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(
+        types.InlineKeyboardButton("🔒 Заблокувати", callback_data=f"ban_{user_id}"),
+        types.InlineKeyboardButton("✅ Розблокувати", callback_data=f"unban_{user_id}")
+    )
+    bot.send_message(
+        GROUP_ID,
+        f"📩 *Нове повідомлення ({category}):*\n\n{text}\n\nВід користувача: {display_name}",
+        parse_mode="Markdown",
+        message_thread_id=THREAD_ID or None,
+        reply_markup=keyboard
+    )
+
+# -------------------- Кнопки Заблокувати / Розблокувати --------------------
+@bot.callback_query_handler(func=lambda call: call.data.startswith(("ban_", "unban_")))
+def callback_buttons(call):
+    if call.from_user.id != ADMIN_ID:
+        call.answer("⛔ Тільки адміністратор")
         return
 
-    if chat_id in user_state:
-        category = user_state.pop(chat_id)
-        display_name = get_user_display_name(user)
+    action, uid = call.data.split("_")
+    uid = int(uid)
+    banlist = load_banlist()
 
-        logs = load_logs()
-        logs.append({
-            "user_id": user_id,
-            "username": display_name,
-            "category": category,
-            "text": text,
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
-        save_logs(logs)
-
-        await update.message.reply_text("✅ Ваше повідомлення отримано. Ми цінуємо вашу конфіденційність і думки.")
-
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔒 Заблокувати", callback_data=f"ban_{user_id}"),
-             InlineKeyboardButton("✅ Розблокувати", callback_data=f"unban_{user_id}")]
-        ])
-        await context.bot.send_message(
-            chat_id=GROUP_ID,
-            text=f"📩 *Нове повідомлення ({category}):*\n\n{text}\n\nВід користувача: {display_name}",
-            parse_mode="Markdown",
-            message_thread_id=THREAD_ID or None,
-            reply_markup=keyboard
-        )
+    if action == "ban":
+        if uid not in banlist:
+            banlist.append(uid)
+            save_banlist(banlist)
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+            bot.send_message(call.message.chat.id, f"🔒 Користувач {uid} заблокований кнопкою")
+        else:
+            call.answer("Він вже заблокований", show_alert=True)
+    elif action == "unban":
+        if uid in banlist:
+            banlist.remove(uid)
+            save_banlist(banlist)
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+            bot.send_message(call.message.chat.id, f"✔ Користувач {uid} розблокований кнопкою")
+        else:
+            call.answer("Він не заблокований", show_alert=True)
 
 # -------------------- Щоденна відправка логів адміну --------------------
-async def send_logs_daily(app):
+def send_logs_daily():
+    logs = load_logs()
+    if logs:
+        filename = "logs.txt"
+        with open(filename, "w", encoding="utf-8") as f:
+            for l in logs:
+                f.write(f"[{l['time']}] {l['user_id']} ({l['username']}, {l['category']}): {l['text']}\n")
+        with open(filename, "rb") as f:
+            bot.send_document(ADMIN_ID, f)
+        os.remove(filename)
+
+def schedule_daily_logs():
+    tz = pytz.timezone("Europe/Kiev")
+    schedule.every().day.at("20:00").do(send_logs_daily).tag("daily_logs")
     while True:
-        now = datetime.now()
-        if now.hour == 20 and now.minute == 0:
-            logs = load_logs()
-            if logs:
-                with open("logs.txt", "w", encoding="utf-8") as f:
-                    for l in logs:
-                        f.write(f"[{l['time']}] {l['user_id']} ({l['username']}, {l['category']}): {l['text']}\n")
-                with open("logs.txt", "rb") as f:
-                    await app.bot.send_document(chat_id=ADMIN_ID, document=f)
-                os.remove("logs.txt")
-            await asyncio.sleep(60)
-        await asyncio.sleep(20)
+        schedule.run_pending()
+        time.sleep(30)
 
 # -------------------- Запуск --------------------
-async def main():
-    print("Бот запущено... Чекаю повідомлень")
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("ban", ban))
-    app.add_handler(CommandHandler("unban", unban))
-    app.add_handler(CommandHandler("banlogs", banlogs))
-    app.add_handler(CallbackQueryHandler(block_button_callback, pattern=r"^(ban|unban)_\d+$"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-
-    asyncio.create_task(send_logs_daily(app))
-
-    await app.run_polling()
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+Thread(target=schedule_daily_logs).start()
+print("Бот запущено... Чекаю повідомлень")
+bot.polling(non_stop=True)
