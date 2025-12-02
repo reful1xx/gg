@@ -1,263 +1,352 @@
-# -- coding: utf-8 --
-
+# -*- coding: utf-8 -*-
 import os
-import telebot
-from telebot import types
-from flask import Flask
+import time
+import requests
+import schedule
 from threading import Thread
 from datetime import datetime
-import schedule
-import time
-import pytz
-import requests
+from flask import Flask
+import telebot
+from telebot import types
 
-# -------------------- Flask на Render --------------------
+# -------------------- Flask (ping для Render) --------------------
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Бот працює 24/7!"
+    return "OK"
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-Thread(target=run_flask).start()
+Thread(target=run_flask, daemon=True).start()
 
-# -------------------- ENV змінні --------------------
+# -------------------- ENV --------------------
 TOKEN = os.environ['TOKEN']
+GROUP_ID = int(os.environ['GROUP_ID'])           # ID групи, куди надсилати повідомлення
+THREAD_ID = int(os.environ.get('THREAD_ID', 0))  # id гілки (thread) або 0
 ADMIN_ID = int(os.environ['ADMIN_ID'])
 
 JSONBIN_API_KEY = os.environ['JSONBIN_API_KEY']
 LOGS_BIN_ID = os.environ['LOGS_BIN_ID']
 BANLIST_BIN_ID = os.environ['BANLIST_BIN_ID']
 
-bot = telebot.TeleBot(TOKEN)
+bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
-# -------------------- JSONBin --------------------
-def load_json(bin_id):
+# -------------------- Стан користувача --------------------
+# коли користувач у приваті вибрав категорію, ми чекаємо його повідомлення
+user_state = {}               # chat_id -> category
+# мапа: message_id (в групі) -> user_id (оригінального автора)
+msg_to_user = {}
+
+# -------------------- JSONBin допоміжні --------------------
+def load_jsonbin(bin_id):
     url = f"https://api.jsonbin.io/v3/b/{bin_id}/latest"
-    r = requests.get(url, headers={"X-Master-Key": JSONBIN_API_KEY})
+    headers = {"X-Master-Key": JSONBIN_API_KEY}
     try:
-        return r.json()['record']
-    except:
-        return []
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            return r.json().get('record', [])
+    except Exception as e:
+        print("JSONBin load error:", e)
+    return []
 
-def save_json(bin_id, data):
+def save_jsonbin(bin_id, data):
     url = f"https://api.jsonbin.io/v3/b/{bin_id}"
-    requests.put(url, json=data, headers={"X-Master-Key": JSONBIN_API_KEY})
+    headers = {"X-Master-Key": JSONBIN_API_KEY, "Content-Type": "application/json"}
+    try:
+        requests.put(url, json=data, headers=headers, timeout=10)
+    except Exception as e:
+        print("JSONBin save error:", e)
 
-def load_logs():
-    return load_json(LOGS_BIN_ID)
-
-def save_logs(data):
-    save_json(LOGS_BIN_ID, data)
-
+# -------------------- Банлист / Логи --------------------
 def load_banlist():
-    return load_json(BANLIST_BIN_ID)
+    # банлист зберігається як список об'єктів: {"user_id": 123, "username": "name"}
+    return load_jsonbin(BANLIST_BIN_ID) or []
 
 def save_banlist(data):
-    save_json(BANLIST_BIN_ID, data)
+    save_jsonbin(BANLIST_BIN_ID, data)
 
-# -------------------- Отримати ім'я юзера --------------------
-def get_user_display_name(message):
-    u = message.from_user
-    if u.username:
-        return f"@{u.username}"
-    name = f"{u.first_name or ''} {u.last_name or ''}".strip()
-    if name:
-        return name
-    return f"tg://user?id={u.id}"
+def load_logs():
+    return load_jsonbin(LOGS_BIN_ID) or []
 
-# -------------------- Обробка всіх повідомлень --------------------
-@bot.message_handler(func=lambda m: True, content_types=['text'])
-def handle_message(message):
+def save_logs(data):
+    save_jsonbin(LOGS_BIN_ID, data)
+
+def is_banned(user_id):
+    for b in load_banlist():
+        if b.get("user_id") == int(user_id):
+            return True
+    return False
+
+def update_username_in_banlist(user_id, username):
+    bl = load_banlist()
+    changed = False
+    for b in bl:
+        if b.get("user_id") == int(user_id):
+            if (b.get("username") or "") != (username or ""):
+                b["username"] = username or ""
+                changed = True
+            break
+    if changed:
+        save_banlist(bl)
+
+def add_ban(user_id, username=""):
+    bl = load_banlist()
+    if not any(b.get("user_id") == int(user_id) for b in bl):
+        bl.append({"user_id": int(user_id), "username": username or ""})
+        save_banlist(bl)
+
+def remove_ban(user_id):
+    bl = load_banlist()
+    bl = [b for b in bl if b.get("user_id") != int(user_id)]
+    save_banlist(bl)
+
+# -------------------- Утиліти для username/link --------------------
+def format_username(username):
+    return f"@{username}" if username else "немає"
+
+def user_link(user_id):
+    return f"tg://user?id={user_id}"
+
+# -------------------- Меню --------------------
+def main_menu():
+    markup = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+    markup.add('📛 Скарга', '💡 Пропозиція')
+    markup.add('❓ Запитання', '📬 Інше')
+    return markup
+
+# -------------------- /start (тільки в приваті) --------------------
+@bot.message_handler(commands=['start'])
+def start_cmd(message):
+    if message.chat.type != "private":
+        return  # ігноруємо виклики /start у групах
+    bot.send_message(message.chat.id,
+                     "Привіт! Виберіть тип повідомлення:",
+                     reply_markup=main_menu())
+
+# -------------------- Вибір категорії (приват) --------------------
+@bot.message_handler(func=lambda m: m.chat.type == "private" and m.text in ['📛 Скарга', '💡 Пропозиція', '❓ Запитання', '📬 Інше'])
+def choose_category(message):
+    user_state[message.chat.id] = message.text
+    bot.send_message(message.chat.id, "✍️ Введіть текст повідомлення (воно буде анонімно переслане в групу):")
+
+# -------------------- Обробка повідомлення від користувача після вибору категорії (приват) --------------------
+@bot.message_handler(func=lambda m: m.chat.type == "private" and m.chat.id in user_state, content_types=['text'])
+def handle_user_submission(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
+    category = user_state.pop(chat_id)  # беремо та видаляємо стан
+    text = message.text or ""
 
-    # 🔒 Перевірка бану
-    banlist = load_banlist()
-    if user_id in banlist:
-        bot.send_message(
-            chat_id,
-            "⛔ Вас заблоковано.\nВи більше не можете надсилати повідомлення."
-        )
+    # Якщо забанений — відповідаємо, нічого не логгуємо і не пересилаємо
+    if is_banned(user_id):
+        bot.send_message(chat_id, "⛔ Вас заблоковано.\nВи більше не можете надсилати повідомлення.")
         return
 
-    # -------------------- Тип повідомлення --------------------
-    if message.reply_to_message:
-        msg_type = "💬 Відповідь"
-    else:
-        msg_type = "📨 Повідомлення"
+    # Оновлюємо username у банлисті якщо треба
+    update_username_in_banlist(user_id, message.from_user.username or "")
 
-    # -------------------- Логи --------------------
-    username = f"@{message.from_user.username}" if message.from_user.username else "немає"
-    user_link = f"tg://user?id={user_id}"
-
+    # --- Логування у JSONBin ---
     logs = load_logs()
     entry = {
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "type": msg_type,
-        "text": message.text,
+        "type": category,
+        "text": text,
         "user_id": user_id,
-        "username": username,
-        "link": user_link
+        "username": message.from_user.username or "",
+        "link": user_link(user_id)
     }
     logs.append(entry)
     save_logs(logs)
 
-    # -------------------- Пересилання адміну --------------------
-    keyboard = types.InlineKeyboardMarkup()
-    keyboard.add(
-        types.InlineKeyboardButton("🚫 Заблокувати", callback_data=f"ban_{user_id}")
+    # --- Підтвердження користувачу ---
+    bot.send_message(chat_id, "✅ Ваше повідомлення надіслано. Дякуємо!")
+
+    # --- Формуємо повідомлення для групи (в гілку, якщо THREAD_ID заданий) ---
+    display_uname = format_username(message.from_user.username)
+    group_text = (
+        f"📩 <b>Нове повідомлення</b>\n"
+        f"Тип: {category}\n\n"
+        f"{text}\n\n"
+        f"ID: <code>{user_id}</code>\n"
+        f"Username: {display_uname}\n"
+        f"Посилання: {user_link(user_id)}"
     )
 
-    bot.send_message(
-        ADMIN_ID,
-        f"📩 *Нове повідомлення*\n"
-        f"Тип: {msg_type}\n"
-        f"Текст: {message.text}\n\n"
-        f"ID: `{user_id}`\n"
-        f"Username: {username}\n"
-        f"Посилання: {user_link}",
-        parse_mode="Markdown",
-        reply_markup=keyboard
-    )
+    # Inline клавіатура: кнопки для адміна
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🚫 Заблокувати", callback_data=f"ban_{user_id}"),
+           types.InlineKeyboardButton("✔️ Розблокувати", callback_data=f"unban_{user_id}"))
 
-    # -------------------- Відповідь користувачу --------------------
-    bot.send_message(chat_id, "✅ Ваше повідомлення отримано.")
-
-# -------------------- Відповідь адміністратора через reply --------------------
-@bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID and m.reply_to_message, content_types=['text'])
-def admin_reply(message):
-    try:
-        text = message.reply_to_message.text
-
-        # В тексті знайти ID користувача
-        for line in text.split("\n"):
-            if line.startswith("ID:"):
-                user_id = int(line.split("`")[1])
-                break
-
-        bot.send_message(user_id, f"✉ Адміністратор відповів:\n\n{message.text}")
-        bot.send_message(ADMIN_ID, "✔ Відповідь надіслано!")
-
-    except:
-        bot.send_message(ADMIN_ID, "❌ Не вдалося знайти ID користувача.")
-
-# -------------------- Callback кнопки бану --------------------
-@bot.callback_query_handler(func=lambda c: c.data.startswith("ban_"))
-def ban_user(call):
-    if call.from_user.id != ADMIN_ID:
-        call.answer("Немає прав", show_alert=True)
-        return
-
-    user_id = int(call.data.split("_")[1])
-    banlist = load_banlist()
-
-    if user_id not in banlist:
-        banlist.append(user_id)
-        save_banlist(banlist)
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
-        bot.send_message(ADMIN_ID, f"🚫 Користувач {user_id} заблокований.")
+    # Надсилаємо в групу (в гілку якщо THREAD_ID)
+    if THREAD_ID:
+        sent = bot.send_message(GROUP_ID, group_text, reply_markup=kb, parse_mode="HTML", message_thread_id=THREAD_ID)
     else:
-        call.answer("Вже заблокований", show_alert=True)
+        sent = bot.send_message(GROUP_ID, group_text, reply_markup=kb, parse_mode="HTML")
 
-# -------------------- Команда /ban --------------------
-@bot.message_handler(commands=['ban'])
-def ban_cmd(message):
-    if message.chat.id != ADMIN_ID:
-        bot.send_message(message.chat.id, "⛔ Немає прав.")
-        return
+    # Зберігаємо відповідність групового повідомлення -> оригінальний user_id
     try:
-        user_id = int(message.text.split()[1])
-        banlist = load_banlist()
-        if user_id not in banlist:
-            banlist.append(user_id)
-            save_banlist(banlist)
-            bot.send_message(ADMIN_ID, f"🚫 Користувач {user_id} заблокований.")
-        else:
-            bot.send_message(ADMIN_ID, "Він вже заблокований.")
-    except:
-        bot.send_message(ADMIN_ID, "Приклад: /ban 123456")
+        msg_to_user[sent.message_id] = user_id
+    except Exception:
+        # деякі старі версії бібліотеки можуть не повертати message_id у відповіді
+        pass
 
-# -------------------- Команда /unban --------------------
-@bot.message_handler(commands=['unban'])
-def unban_cmd(message):
-    if message.chat.id != ADMIN_ID:
-        bot.send_message(message.chat.id, "⛔ Немає прав.")
+# -------------------- Callback: бан/розбан (тільки адмін може) --------------------
+@bot.callback_query_handler(func=lambda call: call.data and (call.data.startswith("ban_") or call.data.startswith("unban_")))
+def callback_ban_unban(call):
+    # дозволяємо натискати лише адміну
+    if call.from_user.id != ADMIN_ID:
+        call.answer("⛔ Тільки адміністратор може виконувати цю дію", show_alert=True)
         return
-    try:
-        user_id = int(message.text.split()[1])
-        banlist = load_banlist()
-        if user_id in banlist:
-            banlist.remove(user_id)
-            save_banlist(banlist)
-            bot.send_message(ADMIN_ID, f"✔ Користувач {user_id} розблокований.")
-        else:
-            bot.send_message(ADMIN_ID, "Цей користувач не заблокований.")
-    except:
-        bot.send_message(ADMIN_ID, "Приклад: /unban 123456")
 
-# -------------------- /getlogs --------------------
+    data = call.data
+    action, uid_str = data.split("_", 1)
+    try:
+        uid = int(uid_str)
+    except:
+        call.answer("Невірний ID", show_alert=True)
+        return
+
+    if action == "ban":
+        # отримуємо username (якщо можливо) щоб додати в банліст
+        username = ""
+        try:
+            chat = bot.get_chat(uid)
+            username = chat.username or ""
+        except:
+            username = ""
+        add_ban(uid, username)
+        # прибираємо reply_markup
+        try:
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except:
+            pass
+        bot.send_message(call.message.chat.id, f"🚫 Користувач {uid} заблокований.")
+    else:  # unban
+        remove_ban(uid)
+        try:
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except:
+            pass
+        bot.send_message(call.message.chat.id, f"✔️ Користувач {uid} розблокований.")
+
+    call.answer()
+
+# -------------------- Reply у групі -> надсилати автору (будь-хто може відповідати) --------------------
+@bot.message_handler(func=lambda m: m.chat.id == GROUP_ID and m.reply_to_message and m.reply_to_message.message_id in msg_to_user, content_types=['text'])
+def group_reply_handler(message):
+    original_group_msg_id = message.reply_to_message.message_id
+    user_id = msg_to_user.get(original_group_msg_id)
+    if not user_id:
+        return
+
+    # Надсилаємо текст автору
+    try:
+        bot.send_message(user_id, f"📬 Відповідь до вашого повідомлення:\n\n{message.text}")
+        # підтверджуємо у групі
+        bot.reply_to(message, "✅ Відповідь відправлена користувачу.")
+    except Exception as e:
+        bot.reply_to(message, "❌ Не вдалося надіслати повідомлення користувачу.")
+
+# -------------------- Команди адміну у ЛС: /getlogs, /getban, /ban, /unban --------------------
 @bot.message_handler(commands=['getlogs'])
-def get_logs(message):
-    if message.chat.id != ADMIN_ID:
-        bot.send_message(message.chat.id, "⛔ Немає прав.")
-        return
-
+def cmd_getlogs(message):
+    # команда тільки у приваті адміну
+    if message.chat.type != "private" or message.from_user.id != ADMIN_ID:
+        return bot.reply_to(message, "❗ Цю команду використовуйте в ЛС (тільки адмiн).")
     logs = load_logs()
-    with open("logs.txt", "w", encoding="utf-8") as f:
+    if not logs:
+        return bot.send_message(message.chat.id, "⚠️ Логи порожні.")
+    # формуємо текстовий файл
+    fname = "logs.txt"
+    with open(fname, "w", encoding="utf-8") as f:
         for l in logs:
-            f.write(
-                f"[{l['time']}]\n"
-                f"Тип: {l['type']}\n"
-                f"Повідомлення: {l['text']}\n"
-                f"ID: {l['user_id']}\n"
-                f"Username: {l['username']}\n"
-                f"Посилання: {l['link']}\n\n"
-            )
+            uname = format_username(l.get("username"))
+            f.write(f"[{l.get('time')}]\nТип: {l.get('type')}\nПовідомлення: \"{l.get('text')}\"\nID: {l.get('user_id')}\nUsername: {uname}\nПосилання: {l.get('link')}\n\n")
+    with open(fname, "rb") as f:
+        bot.send_document(message.chat.id, f)
+    os.remove(fname)
 
-    with open("logs.txt", "rb") as f:
-        bot.send_document(ADMIN_ID, f)
-
-# -------------------- /getban --------------------
 @bot.message_handler(commands=['getban'])
-def get_ban(message):
-    if message.chat.id != ADMIN_ID:
-        bot.send_message(message.chat.id, "⛔ Немає прав.")
-        return
+def cmd_getban(message):
+    if message.chat.type != "private" or message.from_user.id != ADMIN_ID:
+        return bot.reply_to(message, "❗ Цю команду використовуйте в ЛС (тільки адмiн).")
+    bl = load_banlist()
+    if not bl:
+        return bot.send_message(message.chat.id, "⚠️ Банлист порожній.")
+    fname = "banlist.txt"
+    with open(fname, "w", encoding="utf-8") as f:
+        for b in bl:
+            uname = format_username(b.get("username"))
+            uid = b.get("user_id")
+            f.write(f"{uname} | {uid} | {user_link(uid)}\n")
+    with open(fname, "rb") as f:
+        bot.send_document(message.chat.id, f)
+    os.remove(fname)
 
-    banlist = load_banlist()
-    with open("banlist.txt", "w", encoding="utf-8") as f:
-        for uid in banlist:
-            f.write(f"{uid}\n")
+@bot.message_handler(commands=['ban'])
+def cmd_ban(message):
+    if message.chat.type != "private" or message.from_user.id != ADMIN_ID:
+        return bot.reply_to(message, "❗ Цю команду використовуйте в ЛС (тільки адмiн).")
+    parts = message.text.split()
+    if len(parts) < 2:
+        return bot.send_message(message.chat.id, "Використання: /ban USER_ID")
+    try:
+        uid = int(parts[1])
+        username = ""
+        try:
+            chat = bot.get_chat(uid)
+            username = chat.username or ""
+        except:
+            username = ""
+        add_ban(uid, username)
+        bot.send_message(message.chat.id, f"🚫 Користувач {uid} заблокований.")
+    except:
+        bot.send_message(message.chat.id, "Невірний ID.")
 
-    with open("banlist.txt", "rb") as f:
-        bot.send_document(ADMIN_ID, f)
+@bot.message_handler(commands=['unban'])
+def cmd_unban(message):
+    if message.chat.type != "private" or message.from_user.id != ADMIN_ID:
+        return bot.reply_to(message, "❗ Цю команду використовуйте в ЛС (тільки адмiн).")
+    parts = message.text.split()
+    if len(parts) < 2:
+        return bot.send_message(message.chat.id, "Використання: /unban USER_ID")
+    try:
+        uid = int(parts[1])
+        remove_ban(uid)
+        bot.send_message(message.chat.id, f"✔️ Користувач {uid} розблокований.")
+    except:
+        bot.send_message(message.chat.id, "Невірний ID.")
 
-# -------------------- Автоматична відправка логів о 20:00 --------------------
+# -------------------- Щоденна відправка логів адміну о 20:00 --------------------
 def send_logs_daily():
     logs = load_logs()
-    if logs:
-        with open("daily_logs.txt", "w", encoding="utf-8") as f:
-            for l in logs:
-                f.write(
-                    f"[{l['time']}] {l['type']}\n"
-                    f"{l['text']}\n"
-                    f"ID: {l['user_id']} | {l['username']} | {l['link']}\n\n"
-                )
-        with open("daily_logs.txt", "rb") as f:
-            bot.send_document(ADMIN_ID, f)
+    if not logs:
+        return
+    fname = "daily_logs.txt"
+    with open(fname, "w", encoding="utf-8") as f:
+        for l in logs:
+            uname = format_username(l.get("username"))
+            f.write(f"[{l.get('time')}]\nТип: {l.get('type')}\nПовідомлення: \"{l.get('text')}\"\nID: {l.get('user_id')}\nUsername: {uname}\nПосилання: {l.get('link')}\n\n")
+    with open(fname, "rb") as f:
+        bot.send_document(ADMIN_ID, f)
+    os.remove(fname)
 
-def schedule_job():
+def schedule_jobs():
     schedule.every().day.at("20:00").do(send_logs_daily)
     while True:
         schedule.run_pending()
         time.sleep(30)
 
-Thread(target=schedule_job).start()
+Thread(target=schedule_jobs, daemon=True).start()
 
-# -------------------- Запуск --------------------
-print("Бот запущено.")
-bot.polling(non_stop=True)
+# -------------------- Запуск бота --------------------
+print("Бот запущено")
+while True:
+    try:
+        bot.polling(non_stop=True)
+    except Exception as e:
+        print("Polling error:", e)
+        time.sleep(5)
