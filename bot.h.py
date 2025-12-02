@@ -249,25 +249,20 @@ def cmd_unban(message):
         bot.send_message(message.chat.id, "Невірний ID.")
 
 # -------------------- Щоденні логи адміну --------------------
-def send_logs_daily():
-    logs = load_logs()
-    if not logs: return
-    fname = "daily_logs.txt"
-    with open(fname, "w", encoding="utf-8") as f:
-        for l in logs:
-            uname = format_username(l.get("username"))
-            f.write(f"[{l.get('time')}] {l.get('type')}: {l.get('text')}\nID: {l.get('user_id')} | {uname} | {l.get('link')}\n\n")
-    with open(fname, "rb") as f: bot.send_document(ADMIN_ID, f)
-    os.remove(fname)
-
 def schedule_jobs():
-    schedule.every().day.at("20:00").do(send_logs_daily)
+    kyiv = pytz.timezone("Europe/Kyiv")
     while True:
-        schedule.run_pending()
-        time.sleep(30)
+        now = datetime.now(kyiv)
+        target = now.replace(hour=20, minute=0, second=0, microsecond=0)
 
-Thread(target=schedule_jobs, daemon=True).start()
+        if now > target:
+            target = target + timedelta(days=1)
 
+        wait_seconds = (target - now).total_seconds()
+        time.sleep(wait_seconds)
+
+        send_logs_daily()
+        
 # -------------------- Запуск --------------------
 print("Бот запущено")
 while True:
@@ -276,4 +271,5 @@ while True:
     except Exception as e:
         print("Polling error:", e)
         time.sleep(5)
+
 
