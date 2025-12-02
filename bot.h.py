@@ -239,6 +239,6 @@ async def main():
 
     await app.run_polling()
 
-if name == "main":
+if__name__=="__main__":
+    import asyncio
     asyncio.run(main())
-
