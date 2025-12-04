@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+
 import os
 import time
 import requests
@@ -18,12 +19,13 @@ def home():
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
+
 Thread(target=run_flask, daemon=True).start()
 
 # -------------------- ENV --------------------
 TOKEN = os.environ['TOKEN']
-GROUP_ID = int(os.environ['GROUP_ID'])           
-THREAD_ID = int(os.environ.get('THREAD_ID', 0))  
+GROUP_ID = int(os.environ['GROUP_ID'])
+THREAD_ID = int(os.environ.get('THREAD_ID', 0))
 ADMIN_ID = int(os.environ['ADMIN_ID'])
 
 # Підтримка порожнього MODERATORS_ID
@@ -40,8 +42,8 @@ BANLIST_BIN_ID = os.environ['BANLIST_BIN_ID']
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
 # -------------------- Стан користувача --------------------
-user_state = {}               
-msg_to_user = {}              
+user_state = {}
+msg_to_user = {}
 
 # -------------------- JSONBin --------------------
 def load_jsonbin(bin_id):
@@ -110,13 +112,18 @@ def main_menu():
 def start_cmd(message):
     if message.chat.type != "private":
         return
-    bot.send_message(message.chat.id, "Привіт! Вибери тип повідомлення (Повідомлення відправляються Анонімно!):", reply_markup=main_menu())
+    bot.send_message(
+        message.chat.id,
+        "Привіт! Вибери тип повідомлення (Повідомлення відправляються Анонімно!):",
+        reply_markup=main_menu()
+    )
 
 # -------------------- Вибір категорії --------------------
 @bot.message_handler(func=lambda m: m.chat.type == "private" and m.text in ['📛 Скарга', '💡 Пропозиція', '❓ Запитання', '📬 Інше'])
 def choose_category(message):
     user_state[message.chat.id] = message.text
-    bot.send_message(message.chat.id, "✍️ Введіть текст або надішліть фото з описом:")
+    # ✅ виправлений текст
+    bot.send_message(message.chat.id, "✍️ Введіть текст з вашим повідомленням")
 
 # -------------------- Генерація кнопки бану --------------------
 def get_user_ban_button(user_id):
@@ -127,8 +134,9 @@ def get_user_ban_button(user_id):
         kb.add(types.InlineKeyboardButton("🚫 Заблокувати", callback_data=f"ban_{user_id}"))
     return kb
 
-# -------------------- Обробка повідомлення від користувача --------------------
-@bot.message_handler(func=lambda m: m.chat.type == "private" and m.chat.id in user_state, content_types=['text', 'photo'])
+# -------------------- Повідомлення від користувача --------------------
+@bot.message_handler(func=lambda m: m.chat.type == "private" and m.chat.id in user_state,
+                     content_types=['text', 'photo'])
 def handle_user_submission(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
@@ -173,14 +181,20 @@ def handle_user_submission(message):
 
     if is_photo:
         if THREAD_ID:
-            sent = bot.send_photo(GROUP_ID, file_id, caption=group_text, reply_markup=kb, parse_mode="HTML", message_thread_id=THREAD_ID)
+            sent = bot.send_photo(GROUP_ID, file_id, caption=group_text,
+                                  reply_markup=kb, parse_mode="HTML",
+                                  message_thread_id=THREAD_ID)
         else:
-            sent = bot.send_photo(GROUP_ID, file_id, caption=group_text, reply_markup=kb, parse_mode="HTML")
+            sent = bot.send_photo(GROUP_ID, file_id, caption=group_text,
+                                  reply_markup=kb, parse_mode="HTML")
     else:
         if THREAD_ID:
-            sent = bot.send_message(GROUP_ID, group_text, reply_markup=kb, parse_mode="HTML", message_thread_id=THREAD_ID)
+            sent = bot.send_message(GROUP_ID, group_text,
+                                    reply_markup=kb, parse_mode="HTML",
+                                    message_thread_id=THREAD_ID)
         else:
-            sent = bot.send_message(GROUP_ID, group_text, reply_markup=kb, parse_mode="HTML")
+            sent = bot.send_message(GROUP_ID, group_text,
+                                    reply_markup=kb, parse_mode="HTML")
 
     msg_to_user[sent.message_id] = user_id
 
@@ -202,19 +216,29 @@ def callback_ban_unban(call):
     if action == "ban":
         add_ban(uid)
         try:
-            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_user_ban_button(uid))
-        except: pass
+            bot.edit_message_reply_markup(call.message.chat.id,
+                                          call.message.message_id,
+                                          reply_markup=get_user_ban_button(uid))
+        except:
+            pass
         bot.send_message(call.message.chat.id, f"🚫 Користувач {uid} заблокований.")
     else:
         remove_ban(uid)
         try:
-            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=get_user_ban_button(uid))
-        except: pass
+            bot.edit_message_reply_markup(call.message.chat.id,
+                                          call.message.message_id,
+                                          reply_markup=get_user_ban_button(uid))
+        except:
+            pass
         bot.send_message(call.message.chat.id, f"✔️ Користувач {uid} розблокований.")
+
     call.answer()
 
 # -------------------- Reply у групі -> автору --------------------
-@bot.message_handler(func=lambda m: m.chat.id == GROUP_ID and m.reply_to_message and m.reply_to_message.message_id in msg_to_user, content_types=['text', 'photo'])
+@bot.message_handler(func=lambda m: m.chat.id == GROUP_ID
+                               and m.reply_to_message
+                               and m.reply_to_message.message_id in msg_to_user,
+                     content_types=['text', 'photo'])
 def group_reply_handler(message):
     original_user_id = msg_to_user.get(message.reply_to_message.message_id)
     if not original_user_id:
@@ -225,49 +249,128 @@ def group_reply_handler(message):
             caption = message.caption or ""
             bot.send_photo(original_user_id, file_id, caption=caption)
         else:
-            bot.send_message(original_user_id, f"📬 Відповідь на ваше повідомлення:\n\n{message.text}")
+            bot.send_message(original_user_id,
+                             f"📬 Відповідь на ваше повідомлення:\n\n{message.text}")
         bot.reply_to(message, "✅ Відповідь надіслана користувачу.")
     except:
         bot.reply_to(message, "❌ Не вдалося надіслати повідомлення користувачу.")
 
-# -------------------- Функція очищення старих логів --------------------
+# -------------------- Команди адміністратора --------------------
+@bot.message_handler(commands=['ban'])
+def cmd_ban(message):
+    if message.chat.type != "private" or message.from_user.id != ADMIN_ID:
+        return
+    try:
+        uid = int(message.text.split()[1])
+        add_ban(uid)
+        bot.send_message(message.chat.id, f"🚫 Користувач {uid} заблокований.")
+    except:
+        bot.send_message(message.chat.id, "❌ Використання: /ban USER_ID")
+
+@bot.message_handler(commands=['unban'])
+def cmd_unban(message):
+    if message.chat.type != "private" or message.from_user.id != ADMIN_ID:
+        return
+    try:
+        uid = int(message.text.split()[1])
+        remove_ban(uid)
+        bot.send_message(message.chat.id, f"✔️ Користувач {uid} розблокований.")
+    except:
+        bot.send_message(message.chat.id, "❌ Використання: /unban USER_ID")
+
+@bot.message_handler(commands=['getban'])
+def cmd_getban(message):
+    if message.chat.type != "private" or message.from_user.id != ADMIN_ID:
+        return
+
+    bl = load_banlist()
+    if not bl:
+        bot.send_message(message.chat.id, "✅ Банлист порожній.")
+        return
+
+    text = "🚫 Заблоковані користувачі:\n\n"
+    for b in bl:
+        text += f"{format_username(b.get('username'))} | {b.get('user_id')}\n"
+
+    bot.send_message(message.chat.id, text)
+
+@bot.message_handler(commands=['getlogs'])
+def cmd_getlogs(message):
+    if message.chat.type != "private" or message.from_user.id != ADMIN_ID:
+        return
+
+    logs = load_logs()
+    if not logs:
+        bot.send_message(message.chat.id, "⚠️ Логи порожні.")
+        return
+
+    for l in logs:
+        uname = format_username(l.get("username"))
+        text = (
+            f"🕒 {l.get('time')}\n"
+            f"Тип: {l.get('type')}\n"
+            f"Текст: {l.get('text')}\n"
+            f"ID: {l.get('user_id')} | {uname}\n"
+            f"{l.get('link')}"
+        )
+
+        bot.send_message(message.chat.id, text)
+
+        if l.get("photo_id"):
+            bot.send_photo(
+                message.chat.id,
+                l["photo_id"],
+                caption="🖼 Фото з повідомлення"
+            )
+
+# -------------------- Очищення старих логів --------------------
 def clean_old_logs():
     kyiv = pytz.timezone("Europe/Kyiv")
     logs = load_logs()
-    bl = load_banlist()
-    cutoff_date = datetime.now(kyiv) - timedelta(days=20)  # старше 20 днів
+    cutoff_date = datetime.now(kyiv) - timedelta(days=20)
+
     new_logs = []
     for log in logs:
-        log_time = datetime.strptime(log.get("time"), "%Y-%m-%d %H:%M:%S")
-        if log_time >= cutoff_date or is_banned(log.get("user_id")):
-            new_logs.append(log)
+        try:
+            log_time = datetime.strptime(log.get("time"), "%Y-%m-%d %H:%M:%S")
+            if log_time >= cutoff_date or is_banned(log.get("user_id")):
+                new_logs.append(log)
+        except:
+            pass
+
     if len(new_logs) != len(logs):
         save_logs(new_logs)
 
-# -------------------- Щоденні логи адміну --------------------
+# -------------------- Щоденні TXT-логи адміну --------------------
 def send_logs_daily():
-    clean_old_logs()  # очищаємо старі логи перед відправкою
+    clean_old_logs()
+
     logs = load_logs()
     bl = load_banlist()
     if not logs and not bl:
         return
+
     fname_logs = "logs.txt"
     fname_ban = "banlist.txt"
-
     kyiv = pytz.timezone("Europe/Kyiv")
+
     with open(fname_logs, "w", encoding="utf-8") as f:
         for l in logs:
             uname = format_username(l.get("username"))
-            f.write(f"[{l.get('time')}] {l.get('type')}: {l.get('text')}\nID: {l.get('user_id')} | {uname} | {l.get('link')} | Photo: {l.get('photo_id')}\n\n")
+            f.write(
+                f"[{l.get('time')}] {l.get('type')}: {l.get('text')}\n"
+                f"ID: {l.get('user_id')} | {uname} | {l.get('link')} | Photo: {l.get('photo_id')}\n\n"
+            )
+
     with open(fname_ban, "w", encoding="utf-8") as f:
         for b in bl:
             uname = format_username(b.get("username"))
             uid = b.get("user_id")
             f.write(f"{uname} | {uid} | {user_link(uid)}\n")
 
-    # Надсилаємо основному адміну
     with open(fname_logs, "rb") as f:
         bot.send_document(ADMIN_ID, f)
+
     with open(fname_ban, "rb") as f:
         bot.send_document(ADMIN_ID, f)
 
@@ -278,12 +381,15 @@ def daily_logs_loop():
         target = now.replace(hour=20, minute=0, second=0, microsecond=0)
         if now >= target:
             target += timedelta(days=1)
+
         wait_seconds = (target - now).total_seconds()
         time.sleep(wait_seconds)
+
         try:
             send_logs_daily()
         except Exception as e:
             print("Error sending daily logs:", e)
+
         time.sleep(60)
 
 Thread(target=daily_logs_loop, daemon=True).start()
