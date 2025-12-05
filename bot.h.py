@@ -322,12 +322,20 @@ def cmd_getlogs(message):
                 l["photo_id"],
                 caption="🖼 Фото з повідомлення"
             )
+# -------------------- Очищення логів вручну --------------------
+@bot.message_handler(commands=['clearlogs'])
+def cmd_clearlogs(message):
+    if message.chat.type != "private" or message.from_user.id != ADMIN_ID:
+        return
+
+    save_logs([])
+    bot.send_message(message.chat.id, "✅ Усі логи в JSONBin повністю видалені")
 
 # -------------------- Очищення старих логів --------------------
 def clean_old_logs():
     kyiv = pytz.timezone("Europe/Kyiv")
     logs = load_logs()
-    cutoff_date = datetime.now(kyiv) - timedelta(days=20)
+    cutoff_date = datetime.now(kyiv) - timedelta(days=7)
 
     new_logs = []
     for log in logs:
@@ -402,3 +410,4 @@ while True:
     except Exception as e:
         print("Polling error:", e)
         time.sleep(5)
+
